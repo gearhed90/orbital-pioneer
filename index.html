@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Orbital Pioneer</title>
+<meta name="theme-color" content="#0a0e17">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0e17; color: #e8f0ff; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; touch-action: none; }
+#ui { position: fixed; top: 0; left: 0; right: 0; padding: 8px 12px; background: rgba(10,14,23,0.85); backdrop-filter: blur(6px); z-index: 10; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+#planetName { font-weight: 600; color: #7ee0ff; }
+#resources { display: flex; gap: 16px; }
+.res { display: flex; align-items: center; gap: 4px; }
+.res span { color: #a0c8ff; }
+#canvas { display: block; width: 100vw; height: 100vh; background: #12182a; }
+#buildPanel { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(10,14,23,0.92); padding: 12px; z-index: 10; display: flex; gap: 8px; overflow-x: auto; }
+.buildBtn { background: #1a2744; border: 1px solid #3a5a8a; color: #e8f0ff; padding: 10px 14px; border-radius: 8px; font-size: 13px; white-space: nowrap; cursor: pointer; min-width: 120px; }
+.buildBtn:disabled { opacity: 0.4; }
+.buildBtn:active { background: #2a3f6a; }
+#log { position: fixed; top: 50px; left: 12px; font-size: 12px; color: #88aacc; pointer-events: none; max-width: 60%; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <div id="planetName">Luna-1</div>
+  <div id="resources">
+    <div class="res">Regolith: <span id="reg">0</span></div>
+    <div class="res">Ice: <span id="ice">0</span></div>
+    <div class="res">Power: <span id="pwr">0</span></div>
+    <div class="res">Alloy: <span id="aly">0</span></div>
+  </div>
+</div>
+<canvas id="canvas"></canvas>
+<div id="log"></div>
+<div id="buildPanel">
+  <button class="buildBtn" id="btnExtractor" onclick="tryBuild('extractor')">Extractor (10 Reg)</button>
+  <button class="buildBtn" id="btnSolar" onclick="tryBuild('solar')">Solar Array (20 Reg + 5 Ice)</button>
+  <button class="buildBtn" id="btnFactory" onclick="tryBuild('factory')">Alloy Foundry (50 Reg + 20 Ice + 30 Pwr)</button>
+  <button class="buildBtn" id="btnLaunch" onclick="tryLaunch()">Launch to Next Planet</button>
+</div>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize); resize();
+
+const planets = [
+  { name: "Luna-1", color: "#c8d0e0", bg: "#1a2030", goal: { reg: 200, ice: 50 } },
+  { name: "Vesta Drift", color: "#e8c878", bg: "#2a2218", goal: { reg: 800, ice: 200, pwr: 100 } },
+  { name: "Ceres Hollow", color: "#a8c8ff", bg: "#182030", goal: { reg: 3000, ice: 800, aly: 50 } },
+  { name: "Europa Rift", color: "#88e8ff", bg: "#102028", goal: { reg: 12000, ice: 4000, aly: 300 } }
+];
+let planetIndex = 0;
+let resources = { reg: 0, ice: 0, pwr: 0, aly: 0 };
+let buildings = [];
+let pioneer = { x: 0, y: 0, vx: 0, vy: 0 };
+let lastTime = performance.now();
+let logTimeout;
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent = msg;
+  clearTimeout(logTimeout);
+  logTimeout = setTimeout(() => el.textContent = '', 3000);
+}
+
+function updateUI() {
+  document.getElementById('reg').textContent = Math.floor(resources.reg);
+  document.getElementById('ice').textContent = Math.floor(resources.ice);
+  document.getElementById('pwr').textContent = Math.floor(resources.pwr);
+  document.getElementById('aly').textContent = Math.floor(resources.aly);
+  document.getElementById('planetName').textContent = planets[planetIndex].name;
+  document.getElementById('btnExtractor').disabled = resources.reg < 10;
+  document.getElementById('btnSolar').disabled = resources.reg < 20 || resources.ice < 5;
+  document.getElementById('btnFactory').disabled = resources.reg < 50 || resources.ice < 20 || resources.pwr < 30;
+  const g = planets[planetIndex].goal;
+  const canLaunch = resources.reg >= (g.reg||0) && resources.ice >= (g.ice||0) && resources.pwr >= (g.pwr||0) && resources.aly >= (g.aly||0);
+  document.getElementById('btnLaunch').disabled = !canLaunch || planetIndex >= planets.length - 1;
+  document.getElementById('btnLaunch').textContent = planetIndex >= planets.length - 1 ? "Final Planet" : "Launch to Next Planet";
+}
+
+function tryBuild(type) {
+  if (type === 'extractor' && resources.reg >= 10) {
+    resources.reg -= 10;
+    buildings.push({ type: 'extractor', x: Math.random()*W*0.6 + W*0.2, y: Math.random()*H*0.5 + H*0.25 });
+    log("Extractor online");
+  } else if (type === 'solar' && resources.reg >= 20 && resources.ice >= 5) {
+    resources.reg -= 20; resources.ice -= 5;
+    buildings.push({ type: 'solar', x: Math.random()*W*0.6 + W*0.2, y: Math.random()*H*0.5 + H*0.25 });
+    log("Solar array deployed");
+  } else if (type === 'factory' && resources.reg >= 50 && resources.ice >= 20 && resources.pwr >= 30) {
+    resources.reg -= 50; resources.ice -= 20; resources.pwr -= 30;
+    buildings.push({ type: 'factory', x: Math.random()*W*0.6 + W*0.2, y: Math.random()*H*0.5 + H*0.25 });
+    log("Alloy foundry active");
+  }
+  updateUI();
+}
+
+function tryLaunch() {
+  if (planetIndex >= planets.length - 1) return;
+  const g = planets[planetIndex].goal;
+  if (resources.reg >= (g.reg||0) && resources.ice >= (g.ice||0) && resources.pwr >= (g.pwr||0) && resources.aly >= (g.aly||0)) {
+    planetIndex++;
+    buildings = [];
+    pioneer.x = W/2; pioneer.y = H/2;
+    log("Transfer complete. Welcome to " + planets[planetIndex].name);
+    updateUI();
+  }
+}
+
+function loop(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.1);
+  lastTime = now;
+
+  // Idle production
+  let extractors = buildings.filter(b => b.type === 'extractor').length;
+  let solars = buildings.filter(b => b.type === 'solar').length;
+  let factories = buildings.filter(b => b.type === 'factory').length;
+  resources.reg += extractors * 0.8 * dt;
+  resources.ice += extractors * 0.2 * dt;
+  resources.pwr += solars * 1.5 * dt;
+  if (factories > 0 && resources.pwr > 1 && resources.ice > 0.5) {
+    resources.aly += factories * 0.15 * dt;
+    resources.pwr -= factories * 0.3 * dt;
+    resources.ice -= factories * 0.1 * dt;
+  }
+
+  // Pioneer drifts slowly toward center-ish if no input
+  pioneer.x += pioneer.vx * dt;
+  pioneer.y += pioneer.vy * dt;
+  pioneer.vx *= 0.95;
+  pioneer.vy *= 0.95;
+  pioneer.x = Math.max(40, Math.min(W-40, pioneer.x));
+  pioneer.y = Math.max(80, Math.min(H-120, pioneer.y));
+
+  // Draw
+  const p = planets[planetIndex];
+  ctx.fillStyle = p.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Ground
+  ctx.fillStyle = p.color;
+  ctx.globalAlpha = 0.15;
+  ctx.fillRect(0, H*0.65, W, H*0.35);
+  ctx.globalAlpha = 1;
+
+  // Buildings
+  buildings.forEach(b => {
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    if (b.type === 'extractor') {
+      ctx.fillStyle = '#6a8aaa';
+      ctx.fillRect(-12, -20, 24, 20);
+      ctx.fillStyle = '#88aacc';
+      ctx.fillRect(-6, -28, 12, 10);
+    } else if (b.type === 'solar') {
+      ctx.fillStyle = '#3a5a8a';
+      ctx.fillRect(-18, -8, 36, 8);
+      ctx.fillStyle = '#7ee0ff';
+      ctx.fillRect(-16, -18, 32, 10);
+    } else if (b.type === 'factory') {
+      ctx.fillStyle = '#8a6a4a';
+      ctx.fillRect(-16, -24, 32, 24);
+      ctx.fillStyle = '#ffaa66';
+      ctx.fillRect(-4, -36, 8, 14);
+    }
+    ctx.restore();
+  });
+
+  // Pioneer
+  ctx.fillStyle = '#e8f0ff';
+  ctx.beginPath();
+  ctx.arc(pioneer.x, pioneer.y, 10, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#7ee0ff';
+  ctx.fillRect(pioneer.x-4, pioneer.y-16, 8, 8);
+
+  updateUI();
+  requestAnimationFrame(loop);
+}
+
+function handlePointer(e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+  const dx = x - pioneer.x;
+  const dy = y - pioneer.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  pioneer.vx = (dx / dist) * 180;
+  pioneer.vy = (dy / dist) * 180;
+}
+
+canvas.addEventListener('pointerdown', handlePointer);
+canvas.addEventListener('touchstart', handlePointer, { passive: true });
+
+// Init
+pioneer.x = W/2; pioneer.y = H*0.55;
+updateUI();
+requestAnimationFrame(loop);
+
+// Load/save
+function save() {
+  localStorage.setItem('orbitalPioneer', JSON.stringify({ resources, planetIndex, buildings: buildings.map(b => ({type:b.type})) }));
+}
+function load() {
+  try {
+    const d = JSON.parse(localStorage.getItem('orbitalPioneer') || '{}');
+    if (d.resources) resources = d.resources;
+    if (d.planetIndex) planetIndex = d.planetIndex;
+  } catch(e) {}
+}
+load();
+setInterval(save, 5000);
+window.addEventListener('beforeunload', save);
+</script>
+</body>
+</html>
